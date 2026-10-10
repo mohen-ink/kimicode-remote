@@ -108,7 +108,7 @@ private fun AppRoot() {
 
     LaunchedEffect(pendingUri) {
         val uri = pendingUri ?: return@LaunchedEffect
-        val text = QrDecoder.decodeFromUri(context, uri)
+        val (text, error) = QrDecoder.decodeFromUri(context, uri)
         decoding = false
         pendingUri = null
         if (text != null && (text.startsWith("http://") || text.startsWith("https://"))) {
@@ -116,7 +116,7 @@ private fun AppRoot() {
         } else if (text != null) {
             dialogText = text
         } else {
-            dialogText = "未能从所选图片中识别到二维码"
+            dialogText = error ?: "未能从所选图片中识别到二维码"
         }
     }
 

@@ -22,8 +22,8 @@ android {
         applicationId = "com.mohen.kimicoderemote"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -58,6 +58,17 @@ android {
     }
     buildFeatures {
         compose = true
+    }
+
+    androidComponents {
+        onVariants { variant ->
+            if (variant.name == "release") {
+                variant.outputs.forEach {
+                    (it as com.android.build.api.variant.impl.VariantOutputImpl)
+                        .outputFileName = "KimiRemote-v1.1.apk"
+                }
+            }
+        }
     }
 }
 
