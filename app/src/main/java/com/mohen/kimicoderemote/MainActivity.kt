@@ -86,13 +86,30 @@ private fun AppRoot() {
     var pendingUri by remember { mutableStateOf<android.net.Uri?>(null) }
     // bump to refresh history list after changes
     var historyVersion by remember { mutableStateOf(0) }
+    var pendingEntry by remember { mutableStateOf<HistoryEntry?>(null) }
     var historyRefreshTick by remember { mutableStateOf(0) }
 
     fun openUrl(url: String) {
+        val entry = HistoryEntry(url = url, title = url, timestamp = System.currentTimeMillis())
         HistoryStore.add(context, url, null)
         historyVersion++
-        pendingUrl = url
+        pendingEntry = entry
         screen = Screen.Browser
+    }
+
+    fun openFromHistory(entry: HistoryEntry) {
+        HistoryStore.restoreCookies(entry)
+        pendingEntry = entry
+        screen = Screen.Browser
+    }
+
+    fun leaveBrowser() {
+        pendingEntry?.let { entry ->
+            HistoryStore.add(context, entry.url, null, HistoryStore.captureCookies(entry.url))
+        }
+        historyVersion++
+        pendingEntry = null
+        screen = Screen.Home
     }
 
     val scope = rememberCoroutineScope()
@@ -143,23 +160,20 @@ private fun AppRoot() {
             onBack = { screen = Screen.Home }
         )
 
-        Screen.Browser -> pendingUrl?.let { url ->
+        Screen.Browser -> pendingEntry?.let { entry ->
             BrowserScreen(
-                url = url,
+                url = entry.url,
                 onTitle = { title ->
-                    HistoryStore.add(context, url, title)
+                    HistoryStore.add(context, entry.url, title, HistoryStore.captureCookies(entry.url))
                     historyVersion++
                 },
-                onBack = {
-                    screen = Screen.Home
-                    pendingUrl = null
-                }
+                onBack = { leaveBrowser() }
             )
         }
 
         Screen.History -> HistoryScreen(
             refreshTick = historyVersion,
-            onOpen = { entry -> openUrl(entry.url) },
+            onOpen = { entry -> openFromHistory(entry) },
             onClear = {
                 HistoryStore.clear(context)
                 historyVersion++
