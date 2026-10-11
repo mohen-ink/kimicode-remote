@@ -41,20 +41,10 @@ Kimi Code 桌面端「手机远程连接」的 **Android 客户端**。扫码 / 
 
 ## 构建与发布
 
-```bash
-./gradlew assembleRelease   # 输出 app/build/outputs/apk/release/
-```
+详见 [docs/BUILD-RELEASE.md](docs/BUILD-RELEASE.md)。
 
 - Release 构建启用 R8 + 资源收缩，仅 arm64-v8a
-- 签名配置读取仓库根目录 `keystore.properties`（不入库），格式：
-
-  ```properties
-  storeFile=../keystore/kimiremote.jks
-  storePassword=...
-  keyAlias=...
-  keyPassword=...
-  ```
-
+- 签名配置读取仓库根目录 `keystore.properties`（不入库）
 - CI：推送 `v*` 格式的 tag 自动构建并发布 GitHub Release，产物为已签名 APK
 
 ## 更新日志
