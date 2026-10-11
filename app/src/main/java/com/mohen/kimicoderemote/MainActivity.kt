@@ -450,6 +450,7 @@ private fun CameraPreview(
     val lifecycleOwner = LocalLifecycleOwner.current
     val analyzerExecutor = remember { Executors.newSingleThreadExecutor() }
     val analyzerRef = remember { mutableStateOf<QrAnalyzer?>(null) }
+    val providerRef = remember { mutableStateOf<ProcessCameraProvider?>(null) }
 
     AndroidView(
         modifier = modifier,
@@ -458,6 +459,7 @@ private fun CameraPreview(
             val future = ProcessCameraProvider.getInstance(ctx)
             future.addListener({
                 val provider = future.get()
+                providerRef.value = provider
                 val preview = Preview.Builder().build().also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
@@ -486,6 +488,7 @@ private fun CameraPreview(
 
     DisposableEffect(Unit) {
         onDispose {
+            providerRef.value?.unbindAll()
             analyzerRef.value?.stop()
             analyzerExecutor.shutdown()
         }
