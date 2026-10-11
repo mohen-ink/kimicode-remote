@@ -540,9 +540,22 @@ private fun BrowserScreen(url: String, onTitle: (String) -> Unit, onBack: () -> 
         val callback = fileChooserCallback
         fileChooserCallback = null
         if (callback == null) return@rememberLauncherForActivityResult
-        val uris = android.webkit.WebChromeClient.FileChooserParams.parseResult(
+        var uris = android.webkit.WebChromeClient.FileChooserParams.parseResult(
             result.resultCode, result.data
         )
+        // Fallback: some pickers return files via ClipData only
+        if (uris == null && result.data?.clipData != null) {
+            val clip = result.data!!.clipData!!
+            uris = Array(clip.itemCount) { i -> clip.getItemAt(i).uri }
+        }
+        // Ensure the WebView can read the picked files
+        uris?.forEach { uri ->
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+        }
         callback.onReceiveValue(uris ?: arrayOf())
     }
 
@@ -612,8 +625,15 @@ private fun BrowserScreen(url: String, onTitle: (String) -> Unit, onBack: () -> 
                                     filePathCallback.onReceiveValue(arrayOf())
                                 }
                             } else {
-                                val intent = fileChooserParams.createIntent().apply {
-                                    fileChooserMimeTypes?.let { putExtra(Intent.EXTRA_MIME_TYPES, it) }
+                                // Build a robust ACTION_GET_CONTENT intent ourselves:
+                                // createIntent() + EXTRA_MIME_TYPES breaks on some devices
+                                val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                                    type = fileChooserMimeTypes?.firstOrNull() ?: "*/*"
+                                    addCategory(Intent.CATEGORY_OPENABLE)
+                                    fileChooserMimeTypes?.takeIf { it.size > 1 }
+                                        ?.let { putExtra(Intent.EXTRA_MIME_TYPES, it) }
+                                    putExtra(Intent.EXTRA_ALLOW_MULTIPLE, fileChooserParams.mode ==
+                                        FileChooserParams.MODE_OPEN_MULTIPLE)
                                 }
                                 runCatching { fileChooserLauncher.launch(intent) }
                                     .onFailure {
