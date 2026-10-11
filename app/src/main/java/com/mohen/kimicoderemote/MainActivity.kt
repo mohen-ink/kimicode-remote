@@ -138,16 +138,23 @@ private fun AppRoot() {
     }
 
     when (screen) {
-        Screen.Home -> HomeScreen(
-            decoding = decoding,
-            onScan = { screen = Screen.Scan },
-            onPickImage = {
-                pickImageLauncher.launch(
-                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                )
-            },
-            onHistory = { screen = Screen.History }
-        )
+        Screen.Home -> {
+            val lastEntry = remember(historyVersion) {
+                HistoryStore.load(context).firstOrNull()
+            }
+            HomeScreen(
+                decoding = decoding,
+                lastUrl = lastEntry?.let { if (it.title != it.url) it.title else it.host },
+                onUseLast = { lastEntry?.let { openFromHistory(it) } },
+                onScan = { screen = Screen.Scan },
+                onPickImage = {
+                    pickImageLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                },
+                onHistory = { screen = Screen.History }
+            )
+        }
 
         Screen.Scan -> ScanScreen(
             onQrResult = { text ->
@@ -193,6 +200,8 @@ private fun AppRoot() {
 @Composable
 private fun HomeScreen(
     decoding: Boolean,
+    lastUrl: String?,
+    onUseLast: () -> Unit,
     onScan: () -> Unit,
     onPickImage: () -> Unit,
     onHistory: () -> Unit
@@ -234,6 +243,28 @@ private fun HomeScreen(
                     Spacer(modifier = Modifier.size(8.dp))
                 }
                 Text("从相册选择")
+            }
+            if (lastUrl != null) {
+                Button(
+                    onClick = onUseLast,
+                    modifier = Modifier.fillMaxWidth(0.6f),
+                    shape = CircleShape,
+                    enabled = !decoding
+                ) {
+                    Text(
+                        text = "使用上一次链接",
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                }
+                Text(
+                    text = lastUrl,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth(0.7f)
+                )
             }
             OutlinedButton(
                 onClick = onHistory,
@@ -496,6 +527,38 @@ private fun BrowserScreen(url: String, onTitle: (String) -> Unit, onBack: () -> 
     val context = LocalContext.current
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
 
+    // WebView <input type="file"> support; null callback = user cancelled
+    var fileChooserCallback by remember {
+        mutableStateOf<android.webkit.ValueCallback<Array<android.net.Uri>>?>(null)
+    }
+    var fileChooserMimeTypes by remember { mutableStateOf<Array<String>?>(null) }
+    var fileChooserCapture by remember { mutableStateOf<String?>(null) }
+
+    val fileChooserLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val callback = fileChooserCallback
+        fileChooserCallback = null
+        if (callback == null) return@rememberLauncherForActivityResult
+        val uris = android.webkit.WebChromeClient.FileChooserParams.parseResult(
+            result.resultCode, result.data
+        )
+        callback.onReceiveValue(uris ?: arrayOf())
+    }
+
+    val takePictureLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { success ->
+        val callback = fileChooserCallback
+        fileChooserCallback = null
+        if (callback == null) return@rememberLauncherForActivityResult
+        if (success) {
+            callback.onReceiveValue(capturedPhotoUri?.let { arrayOf(it) } ?: arrayOf())
+        } else {
+            callback.onReceiveValue(arrayOf())
+        }
+    }
+
     BackHandler {
         val webView = webViewRef.value
         if (webView != null && webView.canGoBack()) {
@@ -516,12 +579,51 @@ private fun BrowserScreen(url: String, onTitle: (String) -> Unit, onBack: () -> 
                     )
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
+                    settings.allowFileAccess = true
                     webViewClient = object : WebViewClient() {
                         override fun onPageFinished(view: WebView?, title: String?) {
                             if (!title.isNullOrBlank()) onTitle(title)
                         }
                     }
-                    webChromeClient = WebChromeClient()
+                    webChromeClient = object : WebChromeClient() {
+                        override fun onShowFileChooser(
+                            webView: WebView?,
+                            filePathCallback: android.webkit.ValueCallback<Array<android.net.Uri>>,
+                            fileChooserParams: FileChooserParams
+                        ): Boolean {
+                            // A picker is already open; cancel the previous one
+                            fileChooserCallback?.onReceiveValue(arrayOf())
+                            fileChooserCallback = filePathCallback
+                            fileChooserMimeTypes = fileChooserParams.acceptTypes
+                                .takeIf { it.any { t -> t.isNotBlank() } }
+                            fileChooserCapture =
+                                if (fileChooserParams.isCaptureEnabled) "camera" else null
+
+                            if (fileChooserCapture != null) {
+                                // Direct camera capture requested by the page
+                                val photoUri = newCaptureUri(ctx)
+                                capturedPhotoUri = photoUri
+                                val ok = runCatching {
+                                    takePictureLauncher.launch(photoUri)
+                                }.isSuccess
+                                if (!ok) {
+                                    fileChooserCallback = null
+                                    capturedPhotoUri = null
+                                    filePathCallback.onReceiveValue(arrayOf())
+                                }
+                            } else {
+                                val intent = fileChooserParams.createIntent().apply {
+                                    fileChooserMimeTypes?.let { putExtra(Intent.EXTRA_MIME_TYPES, it) }
+                                }
+                                runCatching { fileChooserLauncher.launch(intent) }
+                                    .onFailure {
+                                        fileChooserCallback = null
+                                        filePathCallback.onReceiveValue(arrayOf())
+                                    }
+                            }
+                            return true
+                        }
+                    }
                     loadUrl(url)
                     webViewRef.value = this
                 }
@@ -533,6 +635,20 @@ private fun BrowserScreen(url: String, onTitle: (String) -> Unit, onBack: () -> 
             }
         )
     }
+}
+
+private var capturedPhotoUri by mutableStateOf<android.net.Uri?>(null)
+
+private fun newCaptureUri(context: android.content.Context): android.net.Uri {
+    val file = java.io.File(
+        context.cacheDir,
+        "webview_upload_${System.currentTimeMillis()}.jpg"
+    )
+    return androidx.core.content.FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        file
+    )
 }
 
 @Composable
