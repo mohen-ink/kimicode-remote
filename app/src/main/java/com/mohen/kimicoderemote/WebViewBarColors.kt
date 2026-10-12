@@ -130,6 +130,7 @@ internal class WebViewBarColors(
         val bottomColor = parseOpaqueColor(bottom) ?: return
         synchronized(callbackLock) {
             if (!active || documentId != this.documentId) return
+            mainHandler.removeCallbacksAndMessages(null)
             mainHandler.post {
                 synchronized(callbackLock) {
                     if (!active || documentId != this.documentId) return@post
