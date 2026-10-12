@@ -1,10 +1,13 @@
 package com.mohen.kimicoderemote
 
 import android.Manifest
+import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -26,11 +29,21 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -45,6 +58,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,10 +67,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.launch
 import java.util.concurrent.Executors
@@ -299,7 +315,8 @@ private fun HistoryScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 48.dp, start = 8.dp, end = 16.dp),
+                .statusBarsPadding()
+                .padding(top = 8.dp, start = 8.dp, end = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             TextButton(onClick = onBack) {
@@ -412,7 +429,8 @@ private fun ScanScreen(
                 onClick = onBack,
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .padding(top = 48.dp, start = 8.dp)
+                    .statusBarsPadding()
+                    .padding(top = 8.dp, start = 8.dp)
             ) {
                 Text("← 返回", color = Color.White)
             }
@@ -529,6 +547,74 @@ private fun ScanFrameOverlay(modifier: Modifier = Modifier) {
 private fun BrowserScreen(url: String, onTitle: (String) -> Unit, onBack: () -> Unit) {
     val context = LocalContext.current
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
+    val barColorsByView = remember { mutableMapOf<WebView, WebViewBarColors>() }
+    val backgroundColor = MaterialTheme.colorScheme.background
+    var topColor by remember { mutableStateOf(backgroundColor) }
+    var bottomColor by remember { mutableStateOf(backgroundColor) }
+    val barColorInstaller = remember(context) {
+        context.assets.open("webview-bar-colors.js").bufferedReader().use { it.readText() }
+    }
+
+    val activity = context as? Activity
+    val window = activity?.window
+    DisposableEffect(window) {
+        val oldStatusColor = window?.statusBarColor
+        val oldNavigationColor = window?.navigationBarColor
+        val oldDividerColor = if (Build.VERSION.SDK_INT >= 28) window?.navigationBarDividerColor else null
+        val oldStatusContrast = if (Build.VERSION.SDK_INT >= 29) window?.isStatusBarContrastEnforced else null
+        val oldNavigationContrast = if (Build.VERSION.SDK_INT >= 29) window?.isNavigationBarContrastEnforced else null
+        val oldSoftInputMode = window?.attributes?.softInputMode
+        val insetsController = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
+        val oldLightStatus = insetsController?.isAppearanceLightStatusBars
+        val oldLightNavigation = insetsController?.isAppearanceLightNavigationBars
+        window?.let { w ->
+            w.statusBarColor = android.graphics.Color.TRANSPARENT
+            w.navigationBarColor = android.graphics.Color.TRANSPARENT
+            if (Build.VERSION.SDK_INT >= 28) {
+                w.navigationBarDividerColor = android.graphics.Color.TRANSPARENT
+            }
+            if (Build.VERSION.SDK_INT >= 29) {
+                w.isStatusBarContrastEnforced = false
+                w.isNavigationBarContrastEnforced = false
+            }
+            w.setSoftInputMode(
+                (w.attributes.softInputMode and WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST.inv()) or
+                    WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+            )
+        }
+        onDispose {
+            barColorsByView.values.forEach { it.release() }
+            barColorsByView.clear()
+            window?.let { w ->
+                oldStatusColor?.let { w.statusBarColor = it }
+                oldNavigationColor?.let { w.navigationBarColor = it }
+                if (Build.VERSION.SDK_INT >= 28) {
+                    oldDividerColor?.let { w.navigationBarDividerColor = it }
+                }
+                if (Build.VERSION.SDK_INT >= 29) {
+                    oldStatusContrast?.let { w.isStatusBarContrastEnforced = it }
+                    oldNavigationContrast?.let { w.isNavigationBarContrastEnforced = it }
+                }
+                oldSoftInputMode?.let { w.setSoftInputMode(it) }
+                oldLightStatus?.let { insetsController.isAppearanceLightStatusBars = it }
+                oldLightNavigation?.let { insetsController.isAppearanceLightNavigationBars = it }
+            }
+        }
+    }
+    SideEffect {
+        window?.let { w ->
+            val controller = WindowCompat.getInsetsController(w, w.decorView)
+            val lightStatus = topColor.luminance() >= 0.179f
+            val lightNavigation = bottomColor.luminance() >= 0.179f
+            if (controller.isAppearanceLightStatusBars != lightStatus) {
+                controller.isAppearanceLightStatusBars = lightStatus
+            }
+            if (controller.isAppearanceLightNavigationBars != lightNavigation) {
+                controller.isAppearanceLightNavigationBars = lightNavigation
+            }
+        }
+    }
+
 
     // WebView <input type="file"> support; null callback = user cancelled
     var fileChooserCallback by remember {
@@ -584,80 +670,124 @@ private fun BrowserScreen(url: String, onTitle: (String) -> Unit, onBack: () -> 
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { ctx ->
-                WebView(ctx).apply {
-                    layoutParams = ViewGroup.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT
-                    )
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.allowFileAccess = true
-                    webViewClient = object : WebViewClient() {
-                        override fun onPageFinished(view: WebView?, title: String?) {
-                            if (!title.isNullOrBlank()) onTitle(title)
+    // Three-band layout: color strip / WebView / color strip
+    Column(modifier = Modifier.fillMaxSize()) {
+        ColorStrip(
+            color = topColor,
+            insets = WindowInsets.statusBars,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+        ) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { ctx ->
+                    WebView(ctx).apply {
+                        layoutParams = ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT
+                        )
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.allowFileAccess = true
+                        val barColors = WebViewBarColors(this, barColorInstaller) { top, bottom ->
+                            val newTop = Color(top)
+                            val newBottom = Color(bottom)
+                            if (topColor != newTop) topColor = newTop
+                            if (bottomColor != newBottom) bottomColor = newBottom
                         }
-                    }
-                    webChromeClient = object : WebChromeClient() {
-                        override fun onShowFileChooser(
-                            webView: WebView?,
-                            filePathCallback: android.webkit.ValueCallback<Array<android.net.Uri>>,
-                            fileChooserParams: FileChooserParams
-                        ): Boolean {
-                            // A picker is already open; cancel the previous one
-                            fileChooserCallback?.onReceiveValue(arrayOf())
-                            fileChooserCallback = filePathCallback
-                            fileChooserMimeTypes = fileChooserParams.acceptTypes
-                                .takeIf { it.any { t -> t.isNotBlank() } }
-                            fileChooserCapture =
-                                if (fileChooserParams.isCaptureEnabled) "camera" else null
+                        barColorsByView[this] = barColors
+                        webViewClient = object : WebViewClient() {
+                            override fun onPageStarted(view: WebView?, pageUrl: String?, favicon: android.graphics.Bitmap?) {
+                                if (view === this@apply) barColors.onPageStarted(pageUrl)
+                            }
 
-                            if (fileChooserCapture != null) {
-                                // Direct camera capture requested by the page
-                                val photoUri = newCaptureUri(ctx)
-                                capturedPhotoUri = photoUri
-                                val ok = runCatching {
-                                    takePictureLauncher.launch(photoUri)
-                                }.isSuccess
-                                if (!ok) {
-                                    fileChooserCallback = null
-                                    capturedPhotoUri = null
-                                    filePathCallback.onReceiveValue(arrayOf())
-                                }
-                            } else {
-                                // Build a robust ACTION_GET_CONTENT intent ourselves:
-                                // createIntent() + EXTRA_MIME_TYPES breaks on some devices
-                                val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
-                                    type = fileChooserMimeTypes?.firstOrNull() ?: "*/*"
-                                    addCategory(Intent.CATEGORY_OPENABLE)
-                                    fileChooserMimeTypes?.takeIf { it.size > 1 }
-                                        ?.let { putExtra(Intent.EXTRA_MIME_TYPES, it) }
-                                    putExtra(Intent.EXTRA_ALLOW_MULTIPLE, fileChooserParams.mode ==
-                                        FileChooserParams.MODE_OPEN_MULTIPLE)
-                                }
-                                runCatching { fileChooserLauncher.launch(intent) }
-                                    .onFailure {
+                            override fun doUpdateVisitedHistory(view: WebView?, pageUrl: String?, isReload: Boolean) {
+                                barColors.doUpdateVisitedHistory(view, pageUrl, isReload)
+                            }
+
+                            override fun onPageCommitVisible(view: WebView?, pageUrl: String?) {
+                                barColors.onPageCommitVisible(view, pageUrl)
+                            }
+
+                            override fun onPageFinished(view: WebView?, pageUrl: String?) {
+                                if (!pageUrl.isNullOrBlank()) onTitle(pageUrl)
+                                barColors.onPageFinished(view, pageUrl)
+                            }
+                        }
+                        webChromeClient = object : WebChromeClient() {
+                            override fun onShowFileChooser(
+                                webView: WebView?,
+                                filePathCallback: android.webkit.ValueCallback<Array<android.net.Uri>>,
+                                fileChooserParams: FileChooserParams
+                            ): Boolean {
+                                // A picker is already open; cancel the previous one
+                                fileChooserCallback?.onReceiveValue(arrayOf())
+                                fileChooserCallback = filePathCallback
+                                fileChooserMimeTypes = fileChooserParams.acceptTypes
+                                    .takeIf { it.any { t -> t.isNotBlank() } }
+                                fileChooserCapture =
+                                    if (fileChooserParams.isCaptureEnabled) "camera" else null
+
+                                if (fileChooserCapture != null) {
+                                    // Direct camera capture requested by the page
+                                    val photoUri = newCaptureUri(ctx)
+                                    capturedPhotoUri = photoUri
+                                    val ok = runCatching {
+                                        takePictureLauncher.launch(photoUri)
+                                    }.isSuccess
+                                    if (!ok) {
                                         fileChooserCallback = null
+                                        capturedPhotoUri = null
                                         filePathCallback.onReceiveValue(arrayOf())
                                     }
+                                } else {
+                                    // Build a robust ACTION_GET_CONTENT intent ourselves:
+                                    // createIntent() + EXTRA_MIME_TYPES breaks on some devices
+                                    val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                                        type = fileChooserMimeTypes?.firstOrNull() ?: "*/*"
+                                        addCategory(Intent.CATEGORY_OPENABLE)
+                                        fileChooserMimeTypes?.takeIf { it.size > 1 }
+                                            ?.let { putExtra(Intent.EXTRA_MIME_TYPES, it) }
+                                        putExtra(Intent.EXTRA_ALLOW_MULTIPLE, fileChooserParams.mode ==
+                                            FileChooserParams.MODE_OPEN_MULTIPLE)
+                                    }
+                                    runCatching { fileChooserLauncher.launch(intent) }
+                                        .onFailure {
+                                            fileChooserCallback = null
+                                            filePathCallback.onReceiveValue(arrayOf())
+                                        }
+                                }
+                                return true
                             }
-                            return true
                         }
+                        loadUrl(url)
+                        webViewRef.value = this
                     }
-                    loadUrl(url)
-                    webViewRef.value = this
+                },
+                onRelease = { webView ->
+                    barColorsByView.remove(webView)?.release()
+                    if (webViewRef.value === webView) webViewRef.value = null
+                    webView.stopLoading()
+                    webView.destroy()
                 }
-            },
-            onRelease = { webView ->
-                webViewRef.value = null
-                webView.stopLoading()
-                webView.destroy()
-            }
+            )
+        }
+        ColorStrip(
+            color = bottomColor,
+            insets = WindowInsets.navigationBars.union(WindowInsets.ime).only(WindowInsetsSides.Bottom),
+            modifier = Modifier.fillMaxWidth()
         )
     }
+}
+
+@Composable
+private fun ColorStrip(color: Color, insets: WindowInsets, modifier: Modifier = Modifier) {
+    Spacer(modifier = modifier.background(color).windowInsetsPadding(insets))
 }
 
 private var capturedPhotoUri by mutableStateOf<android.net.Uri?>(null)
